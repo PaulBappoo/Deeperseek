@@ -1,0 +1,30 @@
+{
+  "name": "deepseek-client-frontend",
+  "private": true,
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@blueprintjs/core": "^5.16.4",
+    "@blueprintjs/icons": "^5.17.1",
+    "@blueprintjs/popover2": "^2.1.20",
+    "@chakra-ui/hooks": "^2.4.2",
+    "@chakra-ui/react": "^2.8.2",
+    "@chakra-ui/system": "^2.6.2",
+    "@chakra-ui/theme": "^3.4.6",
+    "@chakra-ui/theme-tools": "^2.2.6",
+    "@chakra-ui/theme-utils": "^2.0.21",
+    "@chakra-ui/toast": "^7.0.2",
+    "@emotion/react": "^11.14.0",
+    "@emotion/styled": "^11.14.0",
+    "framer-motion": "^6.5.1",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.2.1",
+    "vite": "^5.0.0"
+  }
+}

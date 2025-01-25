@@ -1,0 +1,12 @@
+{
+  "build": {
+    "builder": "nixpacks",
+    "config": {
+      "startCommand": "npm start"
+    }
+  },
+  "deploy": {
+    "startCommand": "npm start",
+    "healthcheckPath": "/api/conversations"
+  }
+}
