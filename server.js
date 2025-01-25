@@ -18,6 +18,43 @@ console.log('Using database at:', dbPath);
 // Enable foreign key constraints
 db.pragma('foreign_keys = ON');
 
+// Initialize database tables
+db.exec(`
+  CREATE TABLE IF NOT EXISTS conversations (
+    id TEXT PRIMARY KEY,
+    title TEXT NOT NULL,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  );
+
+  CREATE TABLE IF NOT EXISTS messages (
+    id TEXT PRIMARY KEY,
+    conversation_id TEXT NOT NULL,
+    content TEXT NOT NULL,
+    role TEXT NOT NULL,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (conversation_id) REFERENCES conversations(id)
+  );
+
+  CREATE TABLE IF NOT EXISTS sub_messages (
+    id TEXT PRIMARY KEY,
+    parent_message_id TEXT NOT NULL,
+    content TEXT NOT NULL,
+    role TEXT NOT NULL,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (parent_message_id) REFERENCES messages(id)
+  );
+
+  CREATE TABLE IF NOT EXISTS highlights (
+    id TEXT PRIMARY KEY,
+    message_id TEXT NOT NULL,
+    text TEXT NOT NULL,
+    start_index INTEGER NOT NULL,
+    end_index INTEGER NOT NULL,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (message_id) REFERENCES messages(id)
+  );
+`);
+
 app.use(cors());
 app.use(express.json());
 app.use(express.static('public'));
@@ -25,14 +62,32 @@ app.use(express.static('public'));
 // Get all conversations
 app.get('/api/conversations', (req, res) => {
   try {
+    console.log('Fetching all conversations');
     const stmt = db.prepare(`
       SELECT id, title, created_at 
       FROM conversations 
       ORDER BY created_at DESC
     `);
-    res.json(stmt.all());
+    const conversations = stmt.all();
+    console.log('Found conversations:', conversations);
+    
+    // Ensure we always return an array
+    if (!Array.isArray(conversations)) {
+      console.log('Converting conversations to array');
+      res.json([]);
+    } else {
+      res.json(conversations);
+    }
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    console.error('Error fetching conversations:', error);
+    res.status(500).json({ 
+      error: error.message,
+      details: {
+        code: error.code,
+        errno: error.errno,
+        stack: error.stack
+      }
+    });
   }
 });
 
