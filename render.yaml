@@ -1,0 +1,15 @@
+services:
+  - type: web
+    name: deeperseek
+    env: node
+    buildCommand: npm install && cd frontend && npm install && npm run build && cd ..
+    startCommand: npm start
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: OPENROUTER_API_KEY
+        sync: false
+    disk:
+      name: data
+      mountPath: /var/data
+      sizeGB: 1 

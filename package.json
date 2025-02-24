@@ -4,9 +4,10 @@
   "description": "DeeperSeek Chat Application",
   "main": "server.js",
   "scripts": {
-    "start": "npm install && node server.js",
-    "build": "npm ci && cd frontend && npm ci && npm run build",
-    "dev": "nodemon server.js"
+    "start": "node server.js",
+    "build": "cd frontend && npm install && npm run build",
+    "dev": "nodemon server.js",
+    "postinstall": "cd frontend && npm install"
   },
   "dependencies": {
     "better-sqlite3": "^8.7.0",
