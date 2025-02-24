@@ -11,7 +11,9 @@ const { v4: uuidv4 } = require('uuid');
 
 const app = express();
 const port = process.env.PORT || 3001;
-const dbPath = path.resolve(__dirname, 'chat.db');
+const dbPath = process.env.NODE_ENV === 'production' 
+  ? path.resolve('/var/data/chat.db')
+  : path.resolve(__dirname, 'chat.db');
 const db = new Database(dbPath);
 console.log('Using database at:', dbPath);
 
@@ -61,7 +63,11 @@ app.use(express.json({ limit: '100mb' }));
 app.use(express.urlencoded({ extended: true, limit: '100mb' }));
 app.use(express.raw({ limit: '100mb' }));
 app.use(express.text({ limit: '100mb' }));
-app.use(express.static('public'));
+
+// Serve static files from the React app in production
+if (process.env.NODE_ENV === 'production') {
+  app.use(express.static(path.join(__dirname, 'frontend/dist')));
+}
 
 // Add OpenRouter configuration
 const OPENROUTER_BASE_URL = 'https://openrouter.ai/api/v1';
@@ -395,14 +401,27 @@ app.post('/api/chat', async (req, res) => {
 
     // Step 2: Get analysis from other models
     console.log('Getting analysis from secondary models');
-    const analysisPrompt = [
-      { role: 'user', content: messages[messages.length - 1].content },
-      { role: 'assistant', content: primaryContent },
-      { role: 'user', content: 'Please analyze the above response. Consider its accuracy, completeness, and any potential improvements or corrections needed.' }
-    ];
+    
+    const getModelSpecificPrompt = (model) => {
+      const basePrompt = 'Please analyze the above response. Consider its accuracy, completeness, and any potential improvements or corrections needed.';
+      const modelSpecificInstructions = {
+        'anthropic/claude-3-sonnet': 'As Claude 3 Sonnet, focus on logical consistency and factual accuracy in your analysis.',
+        'google/gemini-pro': 'As Gemini Pro, emphasize technical precision and practical applicability in your review.',
+        'meta-llama/llama-2-70b-chat': 'As Llama 2, concentrate on identifying potential biases and suggesting alternative perspectives.',
+        'perplexity/llama-3.1-sonar-405b-online': 'As Perplexity Sonar, evaluate the response\'s depth and comprehensiveness.'
+      };
+      return `${basePrompt} ${modelSpecificInstructions[model] || ''}`;
+    };
 
     const modelResponses = await Promise.all(SECONDARY_MODELS.map(async (model) => {
       try {
+        console.log(`Sending request to model: ${model}`);
+        const analysisPrompt = [
+          { role: 'user', content: messages[messages.length - 1].content },
+          { role: 'assistant', content: primaryContent },
+          { role: 'user', content: getModelSpecificPrompt(model) }
+        ];
+
         const response = await fetch(`${OPENROUTER_BASE_URL}/chat/completions`, {
           method: 'POST',
           headers: {
@@ -424,6 +443,11 @@ app.post('/api/chat', async (req, res) => {
         }
 
         const result = await response.json();
+        console.log(`Response from ${model}:`, {
+          status: response.status,
+          headers: Object.fromEntries(response.headers.entries()),
+          result: result
+        });
         const content = result.choices[0].message.content;
         
         // Send the analysis to the client
@@ -563,6 +587,13 @@ app.delete('/api/highlights/:id', (req, res) => {
     res.status(500).json({ error: error.message });
   }
 });
+
+// Catch-all route to serve React app
+if (process.env.NODE_ENV === 'production') {
+  app.get('*', (req, res) => {
+    res.sendFile(path.join(__dirname, 'frontend/dist/index.html'));
+  });
+}
 
 app.listen(port, () => {
   console.log(`Server running on port ${port}`);
