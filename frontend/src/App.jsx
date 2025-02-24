@@ -315,8 +315,7 @@ const App = () => {
     const analysisMessageIds = {
       'claude-3-sonnet': uuidv4(),
       'gemini-pro': uuidv4(),
-      'llama-2-70b-chat': uuidv4(),
-      'llama-3.1-sonar-405b-online': uuidv4()
+      'llama-2-70b-chat': uuidv4()
     };
     const synthesisMessageId = uuidv4();
 
@@ -348,13 +347,6 @@ const App = () => {
       {
         id: analysisMessageIds['llama-2-70b-chat'],
         content: 'Waiting for Llama 2 analysis...',
-        role: 'assistant',
-        type: 'analysis',
-        conversation_id: conversationId
-      },
-      {
-        id: analysisMessageIds['llama-3.1-sonar-405b-online'],
-        content: 'Waiting for Perplexity Sonar analysis...',
         role: 'assistant',
         type: 'analysis',
         conversation_id: conversationId
@@ -508,13 +500,6 @@ const App = () => {
         {
           id: analysisMessageIds['llama-2-70b-chat'],
           content: messages[analysisMessageIds['llama-2-70b-chat']].content,
-          role: 'assistant',
-          type: 'analysis',
-          conversation_id: conversationId
-        },
-        {
-          id: analysisMessageIds['llama-3.1-sonar-405b-online'],
-          content: messages[analysisMessageIds['llama-3.1-sonar-405b-online']].content,
           role: 'assistant',
           type: 'analysis',
           conversation_id: conversationId
