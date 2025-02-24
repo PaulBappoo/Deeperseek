@@ -6,14 +6,22 @@ if (process.env.NODE_ENV !== 'production') {
 const express = require('express');
 const cors = require('cors');
 const path = require('path');
+const fs = require('fs');
 const Database = require('better-sqlite3');
 const { v4: uuidv4 } = require('uuid');
 
 const app = express();
 const port = process.env.PORT || 10000;
 const dbPath = process.env.NODE_ENV === 'production' 
-  ? path.resolve('/var/data/chat.db')
+  ? path.resolve(process.env.RENDER_INTERNAL_DATA_PATH || '/opt/render/project/src/data/chat.db')
   : path.resolve(__dirname, 'chat.db');
+
+// Ensure the directory exists
+const dbDir = path.dirname(dbPath);
+if (!fs.existsSync(dbDir)) {
+  fs.mkdirSync(dbDir, { recursive: true });
+}
+
 const db = new Database(dbPath);
 console.log('Using database at:', dbPath);
 
