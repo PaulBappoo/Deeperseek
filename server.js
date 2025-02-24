@@ -74,7 +74,10 @@ app.use(express.text({ limit: '100mb' }));
 
 // Serve static files from the React app in production
 if (process.env.NODE_ENV === 'production') {
+  const publicPath = path.join(__dirname, 'public');
+  app.use(express.static(publicPath));
   app.use(express.static(path.join(__dirname, 'frontend/dist')));
+  console.log('Serving static files from:', publicPath, 'and', path.join(__dirname, 'frontend/dist'));
 }
 
 // Update the HTTP_REFERER for production
@@ -606,7 +609,9 @@ app.delete('/api/highlights/:id', (req, res) => {
 // Catch-all route to serve React app
 if (process.env.NODE_ENV === 'production') {
   app.get('*', (req, res) => {
-    res.sendFile(path.join(__dirname, 'frontend/dist/index.html'));
+    const indexPath = path.join(__dirname, 'frontend/dist/index.html');
+    console.log('Serving index.html from:', indexPath);
+    res.sendFile(indexPath);
   });
 }
 
