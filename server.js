@@ -10,7 +10,7 @@ const Database = require('better-sqlite3');
 const { v4: uuidv4 } = require('uuid');
 
 const app = express();
-const port = process.env.PORT || 3001;
+const port = process.env.PORT || 10000;
 const dbPath = process.env.NODE_ENV === 'production' 
   ? path.resolve('/var/data/chat.db')
   : path.resolve(__dirname, 'chat.db');
@@ -69,14 +69,21 @@ if (process.env.NODE_ENV === 'production') {
   app.use(express.static(path.join(__dirname, 'frontend/dist')));
 }
 
+// Update the HTTP_REFERER for production
+const getHttpReferer = () => {
+  if (process.env.NODE_ENV === 'production') {
+    return process.env.RENDER_EXTERNAL_URL || 'https://deeperseek.onrender.com';
+  }
+  return 'http://localhost:10000';
+};
+
 // Add OpenRouter configuration
 const OPENROUTER_BASE_URL = 'https://openrouter.ai/api/v1';
 const PRIMARY_MODEL = 'openai/o3-mini-high';
 const SECONDARY_MODELS = [
   'anthropic/claude-3-sonnet',
   'google/gemini-pro',
-  'meta-llama/llama-2-70b-chat',
-  'perplexity/llama-3.1-sonar-405b-online'
+  'meta-llama/llama-2-70b-chat'  // Removed problematic model
 ];
 
 // Get all conversations
@@ -345,7 +352,7 @@ app.post('/api/chat', async (req, res) => {
       headers: {
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${process.env.OPENROUTER_API_KEY}`,
-        'HTTP-Referer': 'http://localhost:3001',
+        'HTTP-Referer': getHttpReferer(),
         'X-Title': 'Enhanced Chat Processing'
       },
       body: JSON.stringify({
@@ -427,7 +434,7 @@ app.post('/api/chat', async (req, res) => {
           headers: {
             'Content-Type': 'application/json',
             'Authorization': `Bearer ${process.env.OPENROUTER_API_KEY}`,
-            'HTTP-Referer': 'http://localhost:3001',
+            'HTTP-Referer': getHttpReferer(),
             'X-Title': 'Response Analysis'
           },
           body: JSON.stringify({
@@ -485,7 +492,7 @@ app.post('/api/chat', async (req, res) => {
       headers: {
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${process.env.OPENROUTER_API_KEY}`,
-        'HTTP-Referer': 'http://localhost:3001',
+        'HTTP-Referer': getHttpReferer(),
         'X-Title': 'Response Synthesis'
       },
       body: JSON.stringify({

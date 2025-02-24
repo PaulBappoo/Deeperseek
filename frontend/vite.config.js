@@ -8,7 +8,9 @@ export default defineConfig({
     strictPort: true,
     proxy: {
       '/api': {
-        target: 'http://localhost:3001',
+        target: process.env.NODE_ENV === 'production' 
+          ? process.env.RENDER_EXTERNAL_URL || 'https://deeperseek.onrender.com'
+          : 'http://localhost:10000',
         changeOrigin: true,
         secure: false
       }
