@@ -437,10 +437,14 @@ app.post('/api/chat', async (req, res) => {
       try {
         console.log(`Sending request to model: ${model}`);
         const analysisPrompt = [
-          { role: 'system', content: getModelSpecificPrompt(model) },
-          { role: 'user', content: messages[messages.length - 1].content },
-          { role: 'assistant', content: primaryContent },
-          { role: 'user', content: 'Please provide your analysis.' }
+          { 
+            role: 'system', 
+            content: getModelSpecificPrompt(model)
+          },
+          { 
+            role: 'user', 
+            content: `Please analyze this response about "${messages[messages.length - 1].content}":\n\n${primaryContent}`
+          }
         ];
 
         const response = await fetch(`${OPENROUTER_BASE_URL}/chat/completions`, {
@@ -449,11 +453,12 @@ app.post('/api/chat', async (req, res) => {
             'Content-Type': 'application/json',
             'Authorization': `Bearer ${process.env.OPENROUTER_API_KEY}`,
             'HTTP-Referer': getHttpReferer(),
-            'X-Title': 'Response Analysis'
+            'X-Title': `Analysis by ${model}`
           },
           body: JSON.stringify({
             model: model,
             messages: analysisPrompt,
+            temperature: 0.7,
             stream: false
           })
         });
@@ -466,10 +471,11 @@ app.post('/api/chat', async (req, res) => {
         const result = await response.json();
         console.log(`Response from ${model}:`, {
           status: response.status,
-          headers: Object.fromEntries(response.headers.entries()),
-          result: result
+          model: model,
+          content: result.choices[0]?.message?.content
         });
-        const content = result.choices[0].message.content;
+        
+        const content = result.choices[0]?.message?.content || '';
         
         // Send the analysis to the client
         res.write(`data: ${JSON.stringify({
