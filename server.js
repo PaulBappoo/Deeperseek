@@ -421,23 +421,26 @@ app.post('/api/chat', async (req, res) => {
     console.log('Getting analysis from secondary models');
     
     const getModelSpecificPrompt = (model) => {
-      const basePrompt = 'Please analyze the above response. Consider its accuracy, completeness, and any potential improvements or corrections needed.';
-      const modelSpecificInstructions = {
-        'anthropic/claude-3-sonnet': 'As Claude 3 Sonnet, focus on logical consistency and factual accuracy in your analysis.',
-        'google/gemini-pro': 'As Gemini Pro, emphasize technical precision and practical applicability in your review.',
-        'meta-llama/llama-2-70b-chat': 'As Llama 2, concentrate on identifying potential biases and suggesting alternative perspectives.',
-        'perplexity/llama-3.1-sonar-405b-online': 'As Perplexity Sonar, evaluate the response\'s depth and comprehensiveness.'
-      };
-      return `${basePrompt} ${modelSpecificInstructions[model] || ''}`;
+      switch(model) {
+        case 'anthropic/claude-3-sonnet':
+          return 'As Claude 3 Sonnet, analyze the response focusing on accuracy, completeness, and logical consistency. Be concise but thorough.';
+        case 'google/gemini-pro':
+          return 'As Gemini Pro, evaluate the technical precision and practical value of this response. Focus on what information might be missing.';
+        case 'meta-llama/llama-2-70b-chat':
+          return 'As Llama 2, examine this response for potential biases and suggest alternative perspectives or missing cultural contexts.';
+        default:
+          return 'Please analyze the above response. Consider its accuracy, completeness, and any potential improvements or corrections needed.';
+      }
     };
 
     const modelResponses = await Promise.all(SECONDARY_MODELS.map(async (model) => {
       try {
         console.log(`Sending request to model: ${model}`);
         const analysisPrompt = [
+          { role: 'system', content: getModelSpecificPrompt(model) },
           { role: 'user', content: messages[messages.length - 1].content },
           { role: 'assistant', content: primaryContent },
-          { role: 'user', content: getModelSpecificPrompt(model) }
+          { role: 'user', content: 'Please provide your analysis.' }
         ];
 
         const response = await fetch(`${OPENROUTER_BASE_URL}/chat/completions`, {
