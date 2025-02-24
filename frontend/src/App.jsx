@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import './App.css';
+import { v4 as uuidv4 } from 'uuid';
 
 const App = () => {
   const [conversations, setConversations] = useState([]);
@@ -235,7 +236,6 @@ const App = () => {
     
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
-    let accumulatedContent = '';
     let buffer = '';
     
     try {
@@ -243,7 +243,7 @@ const App = () => {
         if (signal.aborted) {
           console.log('2. Stream aborted, cleaning up');
           await reader.cancel();
-          return accumulatedContent;
+          break;
         }
 
         const { value, done } = await reader.read();
@@ -263,7 +263,7 @@ const App = () => {
           if (signal.aborted) {
             console.log('3. Abort detected during line processing');
             await reader.cancel();
-            return accumulatedContent;
+            break;
           }
 
           if (!line.trim() || !line.startsWith('data: ')) continue;
@@ -272,37 +272,18 @@ const App = () => {
           if (jsonStr === '[DONE]') continue;
           
           try {
-            const json = JSON.parse(jsonStr);
-            const content = json.choices[0].delta.content || '';
-            if (content) {
-              accumulatedContent += content;
-              updateMessage(aiMessageId, accumulatedContent);
-            }
+            const { model, chunk: modelChunk, type } = JSON.parse(jsonStr);
+            
+            // Create a new message for each model's response
+            const modelName = model.split('/').pop();
+            const messageContent = `[${modelName}]: ${modelChunk}`;
+            
+            // Update the corresponding message based on type
+            setMessages(prev => prev.map(msg =>
+              msg.type === type ? { ...msg, content: messageContent } : msg
+            ));
           } catch (e) {
             console.warn('Failed to parse JSON:', e, 'Line:', jsonStr);
-            continue; // Skip this line and continue with the next
-          }
-        }
-      }
-      
-      // Process any remaining data in buffer
-      if (buffer.trim()) {
-        const lines = buffer.split('\n');
-        for (const line of lines) {
-          if (!line.trim() || !line.startsWith('data: ')) continue;
-          
-          const jsonStr = line.slice(5).trim();
-          if (jsonStr === '[DONE]') continue;
-          
-          try {
-            const json = JSON.parse(jsonStr);
-            const content = json.choices[0].delta.content || '';
-            if (content) {
-              accumulatedContent += content;
-              updateMessage(aiMessageId, accumulatedContent);
-            }
-          } catch (e) {
-            console.warn('Failed to parse remaining JSON:', e, 'Line:', jsonStr);
           }
         }
       }
@@ -310,16 +291,82 @@ const App = () => {
       console.log('4. Stream error:', error);
       if (error.name === 'AbortError') {
         await reader.cancel();
-        return accumulatedContent;
       }
       throw error;
     }
-    
-    return accumulatedContent;
   };
 
-  const handleSend = async () => {
-    if (!input.trim()) return;
+  const handleSend = async (content) => {
+    if (!content.trim()) return;
+
+    const conversationId = selectedConversation?.id || uuidv4();
+    const userMessageId = uuidv4();
+
+    // Create user message
+    const userMessage = {
+      id: userMessageId,
+      content,
+      role: 'user',
+      conversation_id: conversationId
+    };
+
+    // Create placeholder messages for each response type
+    const primaryMessageId = uuidv4();
+    const analysisMessageIds = {
+      'claude-3-sonnet': uuidv4(),
+      'gemini-pro': uuidv4(),
+      'llama-2-70b-chat': uuidv4(),
+      'llama-3.1-sonar-405b-online': uuidv4()
+    };
+    const synthesisMessageId = uuidv4();
+
+    // Add all messages to state
+    setMessages(prev => [
+      ...prev,
+      userMessage,
+      {
+        id: primaryMessageId,
+        content: 'Waiting for primary response...',
+        role: 'assistant',
+        type: 'primary',
+        conversation_id: conversationId
+      },
+      {
+        id: analysisMessageIds['claude-3-sonnet'],
+        content: 'Waiting for Claude 3 Sonnet analysis...',
+        role: 'assistant',
+        type: 'analysis',
+        conversation_id: conversationId
+      },
+      {
+        id: analysisMessageIds['gemini-pro'],
+        content: 'Waiting for Gemini Pro analysis...',
+        role: 'assistant',
+        type: 'analysis',
+        conversation_id: conversationId
+      },
+      {
+        id: analysisMessageIds['llama-2-70b-chat'],
+        content: 'Waiting for Llama 2 analysis...',
+        role: 'assistant',
+        type: 'analysis',
+        conversation_id: conversationId
+      },
+      {
+        id: analysisMessageIds['llama-3.1-sonar-405b-online'],
+        content: 'Waiting for Perplexity Sonar analysis...',
+        role: 'assistant',
+        type: 'analysis',
+        conversation_id: conversationId
+      },
+      {
+        id: synthesisMessageId,
+        content: 'Waiting for final synthesis...',
+        role: 'assistant',
+        type: 'synthesis',
+        conversation_id: conversationId
+      }
+    ]);
 
     try {
       const controller = new AbortController();
@@ -342,299 +389,159 @@ const App = () => {
         writeResult: null
       });
 
-      // Create AI message ID early so it's available in error handling
-      const aiMessageId = crypto.randomUUID();
-      
-      console.log('Starting message send process...');
-      
-      // Add user message to UI immediately
-      const userMessage = {
-        id: crypto.randomUUID(),
-        content: input,
-        role: 'user'
-      };
-      console.log('Created user message:', userMessage);
-
-      // Update UI state first
-      setMessages(prev => [...prev, userMessage]);
-      setInput('');
-
       // Ensure we have a conversation
       let currentConversationId = selectedConversation;
 
-      // Search for existing conversation
-      if (currentConversationId) {
-        const searchResponse = await fetch(`/api/conversations/${currentConversationId}`);
-        const searchResult = searchResponse.ok ? await searchResponse.json() : { error: searchResponse.statusText };
-        setDebugInfo(prev => ({ ...prev, searchResult }));
-
-        if (!searchResponse.ok) {
-          currentConversationId = null;
-        } else {
-          setDebugInfo(prev => ({ ...prev, readResult: searchResult }));
-        }
-      }
-
-      // Create new conversation if needed
       if (!currentConversationId) {
         const newId = crypto.randomUUID();
         console.log('Creating new conversation in backend...');
         
-        const createRequest = {
-          url: '/api/conversations',
-          method: 'POST',
-          body: { 
-            id: newId, 
-            title: input.slice(0, 50) // Use first 50 chars of input as title
-          }
-        };
-        
-        setDebugInfo(prev => ({ ...prev, createRequest }));
-        
-        const createConvResponse = await fetch('/api/conversations', {
+        const createResponse = await fetch('/api/conversations', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ 
             id: newId, 
-            title: input.slice(0, 50) // Use first 50 chars of input as title
+            title: input.slice(0, 50)
           })
         });
 
-        const createResponseDetails = {
-          status: createConvResponse.status,
-          statusText: createConvResponse.statusText,
-          headers: Object.fromEntries(createConvResponse.headers.entries())
-        };
-        
-        const createResult = createConvResponse.ok ? 
-          await createConvResponse.json() : 
-          { error: createConvResponse.statusText };
-        
-        setDebugInfo(prev => ({ 
-          ...prev, 
-          createResponse: createResponseDetails,
-          createResult 
-        }));
-
-        if (!createConvResponse.ok) {
+        if (!createResponse.ok) {
           throw new Error('Failed to create conversation');
         }
 
-        // Use the ID returned from the server instead of our generated ID
-        const returnedId = createResult.id;
-        console.log('Using server-returned conversation ID:', returnedId);
-
-        // Update local state with the server's ID
-        setConversations(prev => [...prev, { id: returnedId, title: input.slice(0, 50) }]);
-        setSelectedConversation(returnedId);
-        currentConversationId = returnedId;
-
-        // Read back the created conversation using the server's ID
-        const readRequest = {
-          url: `/api/conversations/${returnedId}`,
-          method: 'GET'
-        };
-        
-        setDebugInfo(prev => ({ ...prev, readRequest }));
-        
-        const readResponse = await fetch(`/api/conversations/${returnedId}`);
-        
-        const readResponseDetails = {
-          status: readResponse.status,
-          statusText: readResponse.statusText,
-          headers: Object.fromEntries(readResponse.headers.entries())
-        };
-        
-        const readResult = readResponse.ok ? 
-          await readResponse.json() : 
-          { error: readResponse.statusText };
-        
-        setDebugInfo(prev => ({ 
-          ...prev, 
-          readResponse: readResponseDetails,
-          readResult 
-        }));
+        const result = await createResponse.json();
+        currentConversationId = result.id;
+        setSelectedConversation(result.id);
+        setConversations(prev => [...prev, { id: result.id, title: input.slice(0, 50) }]);
       }
 
-      // First attempt to save the message
-      console.log('Attempting to save user message...');
-      const saveResponse = await fetch(`/api/conversations/${currentConversationId}/messages`, {
+      // Save user message
+      await fetch(`/api/conversations/${currentConversationId}/messages`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ content: input, role: 'user' })
       });
 
-      if (saveResponse.ok) {
-        // Get the saved message details
-        const savedMessage = await saveResponse.json();
-        
-        // Update the message in state with the saved ID and created_at
-        setMessages(prev => prev.map(msg => 
-          msg.content === input && msg.role === 'user' && !msg.created_at ? 
-          { ...msg, id: savedMessage.id, created_at: savedMessage.created_at, sub_messages: undefined } : 
-          msg
-        ));
-        
-        console.log('Successfully saved user message:', savedMessage);
-        setDebugInfo(prev => ({ ...prev, writeResult: savedMessage }));
-      } else {
-        // Initial save failed, enter retry logic
-        console.log('Initial save failed, entering retry logic...');
-        let retryCount = 0;
-        const maxRetries = 3;
+      // Get streaming responses from all LLMs
+      const response = await fetch('/api/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          messages: messages.map(msg => ({
+            role: msg.role,
+            content: msg.content
+          })).concat([{ role: 'user', content: input }])
+        }),
+        signal: controller.signal
+      });
 
-        while (retryCount < maxRetries) {
-          try {
-            console.log(`Retry attempt ${retryCount + 1} to save user message...`);
-            const retryResponse = await fetch(`/api/conversations/${currentConversationId}/messages`, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ content: input, role: 'user' })
-            });
-
-            if (retryResponse.ok) {
-              // Verify the retry worked
-              const verifyRetryResponse = await fetch(`/api/conversations/${currentConversationId}/messages`);
-              const retryMessages = await verifyRetryResponse.json();
-              if (retryMessages.some(msg => msg.content === input && msg.role === 'user')) {
-                console.log('Successfully saved message on retry');
-                const writeResult = await retryResponse.json();
-                setDebugInfo(prev => ({ ...prev, writeResult }));
-                break;
-              }
-            }
-
-            const errorText = await retryResponse.text();
-            console.error('Retry failed:', {
-              status: retryResponse.status,
-              statusText: retryResponse.statusText,
-              error: errorText
-            });
-
-            if (retryCount < maxRetries - 1) {
-              await new Promise(resolve => setTimeout(resolve, 500 * (retryCount + 1)));
-              retryCount++;
-            } else {
-              throw new Error('Failed to save message after all retries');
-            }
-          } catch (error) {
-            if (retryCount === maxRetries - 1) {
-              console.error('All retry attempts failed:', error);
-              throw error;
-            }
-            retryCount++;
-            await new Promise(resolve => setTimeout(resolve, 500 * retryCount));
-          }
-        }
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
       }
 
-      // Create placeholder for AI response
-      const aiMessage = {
-        id: aiMessageId,
-        content: 'Waiting for AI response...',
-        role: 'assistant',
-        created_at: new Date().toISOString()
-      };
-      console.log('Created AI message placeholder:', aiMessage);
-      setMessages(prev => [...prev, aiMessage]);
-
-      // Get streaming AI response
-      console.log('Requesting AI response...');
-      const requestBody = {
-        model: 'deepseek-chat',
-        messages: messages.map(msg => ({
-          role: msg.role,
-          content: msg.content
-        })).concat([{ role: 'user', content: input }]),
-        stream: true
-      };
-
-      console.log('Sending conversation context:', requestBody.messages);
-
-      const updateMainMessage = (id, content) => {
-        setMessages(prev => prev.map(msg =>
-          msg.id === id ? { ...msg, content } : msg
-        ));
-      };
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
 
       try {
-        console.log('Initiating fetch with abort signal');
-        console.log('Abort controller state:', {
-          exists: !!controller,
-          aborted: controller?.signal.aborted
-        });
+        while (true) {
+          if (controller.signal.aborted) {
+            console.log('Request aborted');
+            await reader.cancel();
+            break;
+          }
 
-        const response = await fetch('/api/deepseek', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(requestBody),
-          signal: controller.signal
-        });
+          const { value, done } = await reader.read();
+          if (done) break;
 
-        if (!response.ok) {
-          throw new Error(`HTTP error! status: ${response.status}`);
-        }
+          const chunk = decoder.decode(value);
+          const lines = chunk.split('\n');
 
-        const finalContent = await handleStreamResponse(response, aiMessageId, updateMainMessage, controller.signal);
-        
-        // Save the AI response to the database
-        console.log('Saving AI response to database...');
-        const saveAIResponse = await fetch(`/api/conversations/${currentConversationId}/messages`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ content: finalContent, role: 'assistant' })
-        });
+          for (const line of lines) {
+            if (!line.trim() || !line.startsWith('data: ')) continue;
 
-        if (!saveAIResponse.ok) {
-          console.error('Failed to save AI response:', await saveAIResponse.text());
-        } else {
-          console.log('Successfully saved AI response');
-          
-          // Get the saved message ID from the response
-          const savedAIMessage = await saveAIResponse.json();
-          
-          // Update the message in state with the saved ID and created_at
-          setMessages(prev => prev.map(msg => 
-            msg.id === aiMessageId ? 
-            { ...msg, id: savedAIMessage.id, created_at: savedAIMessage.created_at, sub_messages: undefined } : 
-            msg
-          ));
-          
-          // Save or update the conversation
-          console.log('Saving/updating conversation...');
-          const saveConvResponse = await fetch(`/api/conversations/${currentConversationId}`, {
-            method: 'PUT',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              title: messages[0]?.content?.slice(0, 50) || 'New Conversation',
-              updated_at: new Date().toISOString()
-            })
-          });
+            const jsonStr = line.slice(5).trim();
+            if (jsonStr === '[DONE]') continue;
 
-          if (!saveConvResponse.ok) {
-            console.error('Failed to update conversation:', await saveConvResponse.text());
-          } else {
-            console.log('Successfully saved/updated conversation');
-            setSelectedConversation(currentConversationId);
+            try {
+              const { model, chunk: modelChunk, type } = JSON.parse(jsonStr);
+              
+              // Update the corresponding message based on type
+              setMessages(prev => prev.map(msg =>
+                msg.type === type ? { ...msg, content: msg.content + modelChunk } : msg
+              ));
+            } catch (e) {
+              console.warn('Failed to parse JSON:', e, 'Line:', jsonStr);
+            }
           }
         }
-
       } catch (error) {
-        console.log('Fetch or stream error:', error);
         if (error.name === 'AbortError') {
-          console.log('Request was aborted');
-          const stoppedMessage = 'Generation stopped by user';
-          updateMainMessage(aiMessageId, stoppedMessage);
+          console.log('Stream aborted');
           return;
         }
         throw error;
+      }
+
+      // Save all AI responses
+      for (const msg of [
+        {
+          id: primaryMessageId,
+          content: messages[primaryMessageId].content,
+          role: 'assistant',
+          type: 'primary',
+          conversation_id: conversationId
+        },
+        {
+          id: analysisMessageIds['claude-3-sonnet'],
+          content: messages[analysisMessageIds['claude-3-sonnet']].content,
+          role: 'assistant',
+          type: 'analysis',
+          conversation_id: conversationId
+        },
+        {
+          id: analysisMessageIds['gemini-pro'],
+          content: messages[analysisMessageIds['gemini-pro']].content,
+          role: 'assistant',
+          type: 'analysis',
+          conversation_id: conversationId
+        },
+        {
+          id: analysisMessageIds['llama-2-70b-chat'],
+          content: messages[analysisMessageIds['llama-2-70b-chat']].content,
+          role: 'assistant',
+          type: 'analysis',
+          conversation_id: conversationId
+        },
+        {
+          id: analysisMessageIds['llama-3.1-sonar-405b-online'],
+          content: messages[analysisMessageIds['llama-3.1-sonar-405b-online']].content,
+          role: 'assistant',
+          type: 'analysis',
+          conversation_id: conversationId
+        },
+        {
+          id: synthesisMessageId,
+          content: messages[synthesisMessageId].content,
+          role: 'assistant',
+          type: 'synthesis',
+          conversation_id: conversationId
+        }
+      ]) {
+        await fetch(`/api/conversations/${currentConversationId}/messages`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            content: msg.content,
+            role: 'assistant',
+            type: msg.type
+          })
+        });
       }
 
     } catch (error) {
       console.error('Error in handleSend:', error);
       handleError(error);
     } finally {
-      console.log('Cleaning up after stream');
       setIsGenerating(false);
       setAbortController(null);
     }
@@ -1086,7 +993,7 @@ const App = () => {
     setInput(messageContent);
     // Wait for state to update
     await new Promise(resolve => setTimeout(resolve, 100));
-    await handleSend();
+    await handleSend(messageContent);
   };
 
   // Refresh icon component
@@ -1181,6 +1088,33 @@ const App = () => {
       <path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/>
     </svg>
   );
+
+  const Message = ({ message }) => {
+    const getModelName = (content) => {
+      const match = content.match(/^\[(.*?)\]:/);
+      return match ? match[1] : '';
+    };
+
+    const getMessageContent = (content) => {
+      return content.replace(/^\[(.*?)\]:/, '').trim();
+    };
+
+    const modelName = getModelName(message.content);
+    const cleanContent = getMessageContent(message.content);
+
+    return (
+      <div className={`message ${message.role}`}>
+        {modelName && (
+          <div className="model-name">
+            {modelName}
+          </div>
+        )}
+        <div className="message-content">
+          {cleanContent}
+        </div>
+      </div>
+    );
+  };
 
   return (
     <div className="app">
@@ -1420,7 +1354,7 @@ const App = () => {
             onKeyDown={(e) => {
               if (e.key === 'Enter' && !e.shiftKey) {
                 e.preventDefault();
-                handleSend();
+                handleSend(input);
               }
             }}
             placeholder="Type your message..."
@@ -1432,7 +1366,10 @@ const App = () => {
               <>
                 <button
                   className="refresh-button"
-                  onClick={() => handleRefresh(input)}
+                  onClick={(e) => {
+                    e.preventDefault();
+                    handleRefresh(input);
+                  }}
                   title="Send again"
                   disabled={!input.trim()}
                 >
@@ -1440,7 +1377,10 @@ const App = () => {
                 </button>
                 <button 
                   className="send-btn"
-                  onClick={handleSend}
+                  onClick={(e) => {
+                    e.preventDefault();
+                    handleSend(input);
+                  }}
                   disabled={!input.trim()}
                 >
                   Send
@@ -1507,24 +1447,6 @@ const App = () => {
                 className={`sub-message ${msg.role}`}
               >
                 {msg.content}
-                <div className="message-actions">
-                  {msg.role === 'user' && (
-                    <button
-                      className="refresh-button"
-                      onClick={() => handleSubMessageSend(msg.content)}
-                      title="Resend this message"
-                    >
-                      <RefreshIcon />
-                    </button>
-                  )}
-                  <button
-                    className="copy-button"
-                    onClick={() => handleCopy(msg.content)}
-                    title="Copy message"
-                  >
-                    <CopyIcon />
-                  </button>
-                </div>
               </div>
             ))}
           </div>

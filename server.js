@@ -55,9 +55,23 @@ db.exec(`
   );
 `);
 
+// Configure Express middleware with increased limits
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ limit: '100mb' }));
+app.use(express.urlencoded({ extended: true, limit: '100mb' }));
+app.use(express.raw({ limit: '100mb' }));
+app.use(express.text({ limit: '100mb' }));
 app.use(express.static('public'));
+
+// Add OpenRouter configuration
+const OPENROUTER_BASE_URL = 'https://openrouter.ai/api/v1';
+const PRIMARY_MODEL = 'openai/o3-mini-high';
+const SECONDARY_MODELS = [
+  'anthropic/claude-3-sonnet',
+  'google/gemini-pro',
+  'meta-llama/llama-2-70b-chat',
+  'perplexity/llama-3.1-sonar-405b-online'
+];
 
 // Get all conversations
 app.get('/api/conversations', (req, res) => {
@@ -305,72 +319,205 @@ app.post('/api/messages/:messageId/highlights', (req, res) => {
   }
 });
 
-// Proxy to Deepseek API
-app.post('/api/deepseek', async (req, res) => {
+// Modify the chat endpoint
+app.post('/api/chat', async (req, res) => {
   try {
-    console.log('Received request for Deepseek API:', {
-      url: 'https://api.deepseek.com/v1/chat/completions',
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': 'Bearer [REDACTED]'
-      },
-      body: req.body
-    });
-
-    const response = await fetch('https://api.deepseek.com/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${process.env.DEEPSEEK_API_KEY}`
-      },
-      body: JSON.stringify(req.body)
-    });
-
-    console.log('Deepseek API response status:', response.status, response.statusText);
-    
-    if (!response.ok) {
-      const errorData = await response.text();
-      console.error('Deepseek API error response:', errorData);
-      try {
-        const jsonError = JSON.parse(errorData);
-        throw new Error(jsonError.error?.message || 'API request failed');
-      } catch (parseError) {
-        console.error('Failed to parse error response:', parseError);
-        throw new Error(`API request failed: ${errorData}`);
-      }
-    }
+    console.log('Received request for enhanced chat processing');
 
     // Set up SSE headers
     res.setHeader('Content-Type', 'text/event-stream');
     res.setHeader('Cache-Control', 'no-cache');
     res.setHeader('Connection', 'keep-alive');
 
-    // Stream the response
-    const reader = response.body.getReader();
+    const { messages } = req.body;
+    let primaryContent = '';
+
+    // Step 1: Get primary response from o3-mini-high
+    console.log('Getting primary response from o3-mini-high');
+    const primaryResponse = await fetch(`${OPENROUTER_BASE_URL}/chat/completions`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${process.env.OPENROUTER_API_KEY}`,
+        'HTTP-Referer': 'http://localhost:3001',
+        'X-Title': 'Enhanced Chat Processing'
+      },
+      body: JSON.stringify({
+        model: PRIMARY_MODEL,
+        messages: messages,
+        stream: true
+      })
+    });
+
+    if (!primaryResponse.ok) {
+      throw new Error(`OpenRouter API error: ${primaryResponse.statusText}`);
+    }
+
+    // Stream the primary model response and collect it
+    const reader = primaryResponse.body.getReader();
     const decoder = new TextDecoder();
+    let buffer = '';
 
     try {
       while (true) {
         const { value, done } = await reader.read();
-        if (done) {
-          res.write('data: [DONE]\n\n');
-          break;
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+
+        for (const line of lines) {
+          if (!line.trim() || !line.startsWith('data: ')) continue;
+          
+          const data = line.slice(5).trim();
+          if (data === '[DONE]') continue;
+
+          try {
+            const json = JSON.parse(data);
+            const content = json.choices?.[0]?.delta?.content || '';
+            if (content) {
+              primaryContent += content;
+              res.write(`data: ${JSON.stringify({
+                model: PRIMARY_MODEL,
+                chunk: content,
+                type: 'primary'
+              })}\n\n`);
+            }
+          } catch (e) {
+            console.warn('Failed to parse JSON:', e);
+          }
         }
-        
-        const chunk = decoder.decode(value);
-        console.log('Streaming chunk:', chunk);
-        
-        // Forward the SSE data as-is
-        res.write(chunk);
       }
-      res.end();
     } catch (error) {
-      console.error('Error streaming response:', error);
-      throw error;
+      console.error('Error processing primary model stream:', error);
     }
+
+    // Step 2: Get analysis from other models
+    console.log('Getting analysis from secondary models');
+    const analysisPrompt = [
+      { role: 'user', content: messages[messages.length - 1].content },
+      { role: 'assistant', content: primaryContent },
+      { role: 'user', content: 'Please analyze the above response. Consider its accuracy, completeness, and any potential improvements or corrections needed.' }
+    ];
+
+    const modelResponses = await Promise.all(SECONDARY_MODELS.map(async (model) => {
+      try {
+        const response = await fetch(`${OPENROUTER_BASE_URL}/chat/completions`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${process.env.OPENROUTER_API_KEY}`,
+            'HTTP-Referer': 'http://localhost:3001',
+            'X-Title': 'Response Analysis'
+          },
+          body: JSON.stringify({
+            model: model,
+            messages: analysisPrompt,
+            stream: false
+          })
+        });
+
+        if (!response.ok) {
+          console.error(`Error with model ${model}: ${response.statusText}`);
+          return null;
+        }
+
+        const result = await response.json();
+        const content = result.choices[0].message.content;
+        
+        // Send the analysis to the client
+        res.write(`data: ${JSON.stringify({
+          model: model,
+          chunk: content,
+          type: 'analysis'
+        })}\n\n`);
+
+        return {
+          model,
+          content
+        };
+      } catch (error) {
+        console.error(`Error with model ${model}:`, error);
+        return null;
+      }
+    }));
+
+    // Filter out failed responses
+    const validResponses = modelResponses.filter(r => r !== null);
+
+    // Step 3: Synthesize final response
+    console.log('Synthesizing final response');
+    const synthesisPrompt = [
+      { role: 'system', content: 'You are a synthesis expert. Your task is to create a comprehensive response based on multiple AI models\' inputs.' },
+      { role: 'user', content: `Original question: ${messages[messages.length - 1].content}` },
+      { role: 'assistant', content: `Primary response (o3-mini-high): ${primaryContent}` },
+      ...validResponses.map(r => ({ role: 'assistant', content: `Analysis from ${r.model}: ${r.content}` })),
+      { role: 'user', content: 'Please synthesize a final response that incorporates the insights from all models while resolving any contradictions. Focus on providing the most accurate and complete answer.' }
+    ];
+
+    const synthesisResponse = await fetch(`${OPENROUTER_BASE_URL}/chat/completions`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${process.env.OPENROUTER_API_KEY}`,
+        'HTTP-Referer': 'http://localhost:3001',
+        'X-Title': 'Response Synthesis'
+      },
+      body: JSON.stringify({
+        model: PRIMARY_MODEL,
+        messages: synthesisPrompt,
+        stream: true
+      })
+    });
+
+    if (!synthesisResponse.ok) {
+      throw new Error(`Synthesis error: ${synthesisResponse.statusText}`);
+    }
+
+    // Stream the synthesis response
+    const synthesisReader = synthesisResponse.body.getReader();
+    buffer = '';
+
+    try {
+      while (true) {
+        const { value, done } = await synthesisReader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+
+        for (const line of lines) {
+          if (!line.trim() || !line.startsWith('data: ')) continue;
+          
+          const data = line.slice(5).trim();
+          if (data === '[DONE]') continue;
+
+          try {
+            const json = JSON.parse(data);
+            const content = json.choices?.[0]?.delta?.content || '';
+            if (content) {
+              res.write(`data: ${JSON.stringify({
+                model: 'synthesis',
+                chunk: content,
+                type: 'synthesis'
+              })}\n\n`);
+            }
+          } catch (e) {
+            console.warn('Failed to parse synthesis JSON:', e);
+          }
+        }
+      }
+    } catch (error) {
+      console.error('Error processing synthesis stream:', error);
+    }
+
+    res.write('data: [DONE]\n\n');
+    res.end();
+
   } catch (error) {
-    console.error('Error in Deepseek API proxy:', error);
+    console.error('Error in enhanced chat:', error);
     res.status(500).json({ 
       error: error.message,
       details: error.stack 
